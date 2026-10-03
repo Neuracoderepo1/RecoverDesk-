@@ -31,6 +31,11 @@ test("owner creates a case and advances its lifecycle", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Resolve" })).toBeVisible();
   await page.click('[data-view="activity"]');
   await expect(page.getByText("status changed")).toBeVisible();
+
+  // Toasts auto-hide after 4s, so assert immediately after the action.
+  await page.getByText("QA case A").first().click();
+  await page.selectOption("#dPriority", "high");
+  await expect(page.locator("#toast")).toHaveText("Priority updated");
 });
 
 test("a second user cannot see the first user's data", async ({ page }) => {

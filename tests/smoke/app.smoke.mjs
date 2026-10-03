@@ -27,7 +27,7 @@ const html = read("index.html");
 const config = read("config.js");
 const workflow = read(".github/workflows/deploy.yml");
 
-const SHIPPED = ["index.html", "app.js", "config.js", "styles.css", "favicon.svg"];
+const SHIPPED = ["index.html", "app.js", "config.js", "styles.css", "favicon.svg", "vendor/supabase.js"];
 
 /* ---------- static: source integrity ---------- */
 
@@ -140,7 +140,8 @@ test("index.html references only files that exist and ship", () => {
 test("Pages workflow copies every shipped asset", () => {
   for (const f of SHIPPED) {
     assert.ok(existsSync(join(ROOT, f)), `${f} exists in repo`);
-    assert.ok(workflow.includes(f), `deploy.yml copies ${f}`);
+    const top = f.split("/")[0]; // directories are copied with `cp -r`, so match the top-level name
+    assert.ok(workflow.includes(top), `deploy.yml copies ${top}`);
   }
 });
 
@@ -152,12 +153,15 @@ test("CSP allows what app.js needs and nothing obviously unsafe", () => {
   const connect = csp.match(/connect-src([^;]*)/)?.[1] || "";
   const script = csp.match(/script-src([^;]*)/)?.[1] || "";
   assert.ok(connect.includes(new URL(supabaseUrl).host) || connect.includes("https://*.supabase.co"), "connect-src allows Supabase");
-  assert.ok(script.includes("cdn.jsdelivr.net"), "script-src allows jsDelivr (supabase-js ESM import)");
+  assert.match(script, /^\s*'self'\s*$/, "script-src is 'self' only (supabase-js is vendored)");
   assert.doesNotMatch(script, /unsafe-eval/, "no unsafe-eval");
 });
 
-test("app.js imports from a pinned supabase-js version", () => {
-  assert.match(app, /@supabase\/supabase-js@\d+\.\d+\.\d+\/\+esm/);
+test("app.js imports the vendored supabase-js, not a CDN", () => {
+  assert.match(app, /from\s+"\.\/vendor\/supabase\.js"/);
+  assert.doesNotMatch(app, /from\s+"https?:/, "no remote module imports");
+  assert.doesNotMatch(html, /<script[^>]+src="https?:/, "no remote <script> tags in index.html");
+  assert.ok(read("vendor/supabase.js").includes("createClient"), "vendor bundle exports createClient");
 });
 
 /* ---------- static: secrets & hygiene ---------- */

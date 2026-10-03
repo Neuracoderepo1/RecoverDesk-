@@ -48,7 +48,7 @@ Run `supabase/tests/schema_contract.sql` (read-only) to confirm the live project
 
 ## QA and deploy
 
-- CI (`.github/workflows/ci.yml`, on push and PR): syntax check, no-privileged-key check, CSP check, then Playwright smoke tests (`tests/e2e/landing.spec.mjs`, no backend needed).
+- CI (`.github/workflows/ci.yml`, on push and PR): syntax check, no-privileged-key check, CSP check, static smoke tests (`node --test tests/smoke/app.smoke.mjs`), then Playwright browser smoke tests (`tests/e2e/landing.spec.mjs`, no backend needed). Add `BASE_URL=<site>` to the static smoke tests to also verify the deployed site.
 - Live browser QA: `tests/e2e/workspace.spec.mjs` creates real users and cases in the Supabase project, so it is opt-in: `npm run test:live` locally, or run the CI workflow manually with `live` ticked. Requires Auth > Email > "Confirm email" off, or pre-confirmed users.
 - Local: `npm ci && npx playwright install chromium && npm run test:e2e`.
 - Deploy: GitHub Pages via `.github/workflows/deploy.yml` on push to `main`. Add the Pages URL to Supabase Auth → URL Configuration (Site URL + Redirect URLs).

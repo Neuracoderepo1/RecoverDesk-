@@ -23,6 +23,8 @@ jobs:
         with: { node-version: 22 }
       - name: Syntax check
         run: node --check app.js && node --check config.js
+      - name: Static smoke tests (no network, no data writes)
+        run: node --test tests/smoke/app.smoke.mjs
       - name: No privileged Supabase keys in the repo
         run: |
           if grep -rInE "service_role|sb_secret_|SUPABASE_SERVICE" --exclude-dir=.git --exclude-dir=node_modules --exclude=ci.yml --exclude=README.md --exclude=ARCHITECTURE.md .; then
