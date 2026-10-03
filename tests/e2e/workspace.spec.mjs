@@ -1,8 +1,11 @@
 // Browser QA against the live Supabase project.
 // Prereq: Auth > Providers > Email > "Confirm email" OFF for the QA run (or use pre-confirmed users).
-// Run: BASE_URL=http://localhost:8080 npx playwright test tests/e2e --reporter=list
+// Run: npm run test:live   (needs a pre-confirmed or confirm-email-off QA setup)
 import { test, expect } from "@playwright/test";
 const BASE = process.env.BASE_URL || "http://localhost:8080";
+// Creates real users/cases in the live project, so it only runs when explicitly enabled.
+test.skip(!process.env.E2E_LIVE, "set E2E_LIVE=1 to run against live Supabase");
+test.describe.configure({ mode: "serial" });
 const stamp = Date.now();
 const users = { a: `qa-a-${stamp}@example.com`, b: `qa-b-${stamp}@example.com` };
 const pw = "RecoverDesk-QA-1!";

@@ -1,0 +1,14 @@
+{
+  "name": "recoverdesk",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "python3 -m http.server 8080",
+    "check": "node --check app.js && node --check config.js",
+    "test:e2e": "playwright test",
+    "test:live": "E2E_LIVE=1 playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1"
+  }
+}
