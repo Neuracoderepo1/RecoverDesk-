@@ -1324,7 +1324,11 @@ function renderDetail(id) {
         ) +
       "</select>" +
 
-      '<select id="dPriority" aria-label="Priority">' +
+      '<select id="dPriority" aria-label="Priority"' +
+        (isOwner
+          ? ""
+          : ' disabled title="Only the owner can change priority"') +
+        ">" +
         opts(
           PRIORITIES,
           c.priority
