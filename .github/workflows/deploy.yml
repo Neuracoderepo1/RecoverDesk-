@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
-      - run: mkdir _site && cp index.html app.js config.js styles.css _site/
+      - run: mkdir _site && cp index.html app.js config.js styles.css favicon.svg _site/
       - uses: actions/upload-pages-artifact@v3
         with: { path: _site }
       - id: d
