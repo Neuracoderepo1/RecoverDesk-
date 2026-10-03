@@ -11,14 +11,47 @@ const TIMEOUT_MS = 20_000;
 
 function timedFetch(input, init = {}) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
-  const requestInit = {
-    ...init,
-    signal: init.signal || controller.signal
-  };
+  const timer = setTimeout(() => {
+    controller.abort(
+      new DOMException("Request timed out", "TimeoutError")
+    );
+  }, TIMEOUT_MS);
 
-  return fetch(input, requestInit).finally(() => clearTimeout(timer));
+  // Honour a caller-supplied signal as well as our own timeout.
+  const outer = init.signal;
+
+  if (outer) {
+    if (outer.aborted) {
+      controller.abort(outer.reason);
+    } else {
+      outer.addEventListener(
+        "abort",
+        () => controller.abort(outer.reason),
+        { once: true }
+      );
+    }
+  }
+
+  const stop = () => clearTimeout(timer);
+
+  return fetch(input, { ...init, signal: controller.signal }).then(
+    res => {
+      // Keep the timer running until the body has arrived, so a
+      // stalled response body is covered as well as the headers.
+      try {
+        res.clone().arrayBuffer().then(stop, stop);
+      } catch {
+        stop();
+      }
+
+      return res;
+    },
+    error => {
+      stop();
+      throw error;
+    }
+  );
 }
 
 const supabase = createClient(
@@ -122,15 +155,37 @@ function friendly(err) {
   );
 
   const msg = raw.toLowerCase();
+  const code = String(err?.code || err?.error_code || "").toLowerCase();
+  const name = String(err?.name || "");
+  const status = Number(err?.status);
 
   if (
+    code === "over_email_send_rate_limit" ||
     msg.includes("over_email_send_rate_limit") ||
-    msg.includes("rate limit")
+    msg.includes("email rate limit")
   ) {
     return "Too many emails were sent recently. Please wait a while before trying again.";
   }
 
   if (
+    status === 429 ||
+    msg.includes("rate limit") ||
+    msg.includes("too many requests")
+  ) {
+    return "Too many requests. Please wait a moment and try again.";
+  }
+
+  if (
+    code === "57014" ||
+    msg.includes("statement timeout") ||
+    msg.includes("canceling statement")
+  ) {
+    return "The server took too long to respond. Please try again.";
+  }
+
+  if (
+    name === "AbortError" ||
+    name === "TimeoutError" ||
     msg.includes("failed to fetch") ||
     msg.includes("networkerror") ||
     msg.includes("network request") ||
@@ -138,9 +193,29 @@ function friendly(err) {
     msg.includes("timeout") ||
     msg.includes("timed out") ||
     msg.includes("aborterror") ||
-    msg.includes("aborted")
+    msg.includes("aborted") ||
+    msg.includes("load failed") ||
+    msg.includes("failed to load")
   ) {
     return "Network problem — check your connection and try again.";
+  }
+
+  if (
+    code === "42501" ||
+    msg.includes("row-level security") ||
+    msg.includes("permission denied") ||
+    msg.includes("not permitted") ||
+    msg.includes("only the owner")
+  ) {
+    return "You don't have permission to do that.";
+  }
+
+  if (
+    msg.includes("jwt expired") ||
+    msg.includes("invalid jwt") ||
+    msg.includes("refresh token")
+  ) {
+    return "Your session has expired. Please sign in again.";
   }
 
   if (
@@ -164,14 +239,16 @@ function friendly(err) {
     return "An account with this email already exists. Try signing in.";
   }
 
-  if (
-    msg.includes("load failed") ||
-    msg.includes("failed to load")
-  ) {
-    return "Network problem — check your connection and try again.";
+  // Auth errors carry user-facing text (for example, a weak password).
+  if (name.startsWith("Auth") && raw) {
+    return raw;
   }
 
-  return raw || "Something went wrong. Please try again.";
+  // Anything else may contain internals (SQL, policy names): log it,
+  // but never show it.
+  console.warn("Unmapped error:", err);
+
+  return "Something went wrong. Please try again.";
 }
 
 /* =========================================================
@@ -184,6 +261,36 @@ const detailModal = $("#detailModal");
 
 const returnFocus = new Map();
 
+const modals = [authModal, caseModal, detailModal];
+
+/*
+  While any modal is open, the rest of the page is made inert so that
+  keyboard focus and assistive technology cannot reach content behind it.
+*/
+function syncInert() {
+  const anyOpen = modals.some(
+    m => m && !m.classList.contains("hidden")
+  );
+
+  document
+    .querySelectorAll("body > :not(.modal):not(script):not(#toast)")
+    .forEach(el => {
+      if (anyOpen) {
+        el.setAttribute("inert", "");
+      } else {
+        el.removeAttribute("inert");
+      }
+    });
+}
+
+function focusSafely(el) {
+  try {
+    el.focus({ preventScroll: true });
+  } catch {
+    el.focus();
+  }
+}
+
 function openModal(m) {
   if (!m) return;
 
@@ -193,18 +300,13 @@ function openModal(m) {
 
   m.classList.remove("hidden");
 
+  syncInert();
+
   const card = m.querySelector(".modal-card");
 
   if (card) {
     card.setAttribute("tabindex", "-1");
-
-    try {
-      card.focus({
-        preventScroll: true
-      });
-    } catch {
-      card.focus();
-    }
+    focusSafely(card);
   }
 }
 
@@ -215,7 +317,11 @@ function closeModal(m) {
 
   if (m === detailModal) {
     state.detailId = null;
+    delete detailModal.dataset.caseId;
   }
+
+  // Un-inert the page before restoring focus, or focus() is refused.
+  syncInert();
 
   const back = returnFocus.get(m);
 
@@ -223,16 +329,21 @@ function closeModal(m) {
 
   if (
     back &&
+    back !== document.body &&
     back.isConnected &&
     typeof back.focus === "function"
   ) {
-    try {
-      back.focus({
-        preventScroll: true
-      });
-    } catch {
-      back.focus();
-    }
+    focusSafely(back);
+    return;
+  }
+
+  // The opener was re-rendered away: land on a stable control instead.
+  const fallback = document.querySelector(
+    ".side-btn.active, #openAuth"
+  );
+
+  if (fallback) {
+    focusSafely(fallback);
   }
 }
 
@@ -362,7 +473,7 @@ $("#authForm").addEventListener("submit", async e => {
     ) {
       return notice(
         msg,
-        "Account created. Check your email to confirm access."
+        "Almost there — check your email for a confirmation link. Already registered? Just sign in."
       );
     }
 
@@ -556,8 +667,13 @@ supabase.auth.onAuthStateChange(
    Data
    ========================================================= */
 
+let loadSeq = 0;
+
 async function loadCases() {
   if (!state.user) return;
+
+  // Only the most recent request may update the UI.
+  const seq = ++loadSeq;
 
   try {
     const {
@@ -575,10 +691,12 @@ async function loadCases() {
       throw error;
     }
 
-    state.cases = data || [];
-    state.people = {};
+    if (seq !== loadSeq) return;
 
-    if (state.cases.length) {
+    const rows = data || [];
+    const people = {};
+
+    if (rows.length) {
       const {
         data: ppl,
         error: pe
@@ -586,9 +704,11 @@ async function loadCases() {
         "case_people",
         {
           p_cases:
-            state.cases.map(c => c.id)
+            rows.map(c => c.id)
         }
       );
+
+      if (seq !== loadSeq) return;
 
       if (pe) {
         console.warn(
@@ -597,10 +717,13 @@ async function loadCases() {
         );
       } else {
         for (const p of ppl || []) {
-          state.people[p.case_id] = p;
+          people[p.case_id] = p;
         }
       }
     }
+
+    state.cases = rows;
+    state.people = people;
 
     renderWorkspace();
 
@@ -810,6 +933,11 @@ const opts = (
     .join("");
 
 function renderCasesView() {
+  // Keep the toolbar (and any text being typed) across data reloads.
+  if ($("#fQ") && $("#caseResults")) {
+    return renderCaseResults();
+  }
+
   const f = state.filters;
 
   $("#view").innerHTML =
@@ -890,6 +1018,10 @@ function renderCasesView() {
         );
 
       if (act) {
+        if (act.getAttribute("aria-busy") === "true") return;
+
+        act.setAttribute("aria-busy", "true");
+
         return void updateCase(
           act.dataset.id,
           {
@@ -897,7 +1029,11 @@ function renderCasesView() {
               act.dataset.status
           },
           "Status updated"
-        );
+        ).then(ok => {
+          if (!ok && act.isConnected) {
+            act.removeAttribute("aria-busy");
+          }
+        });
       }
 
       const card =
@@ -917,7 +1053,7 @@ function renderCasesView() {
     "keydown",
     e => {
       if (
-        e.key !== "Enter" ||
+        (e.key !== "Enter" && e.key !== " ") ||
         e.target.closest("button")
       ) {
         return;
@@ -929,6 +1065,8 @@ function renderCasesView() {
         );
 
       if (card) {
+        e.preventDefault();
+
         openDetail(
           card.dataset.open
         );
@@ -982,6 +1120,30 @@ const isOverdue = c =>
     new Date();
 
 function renderCaseResults() {
+  const box = $("#caseResults");
+  const active = document.activeElement;
+  let refocus = "";
+
+  if (box && active && box.contains(active)) {
+    if (active.dataset.id) {
+      refocus = 'button[data-id="' + active.dataset.id + '"]';
+    } else if (active.dataset.open) {
+      refocus = 'article[data-open="' + active.dataset.open + '"]';
+    }
+  }
+
+  paintCaseResults();
+
+  if (refocus) {
+    const el = box.querySelector(refocus);
+
+    if (el) {
+      focusSafely(el);
+    }
+  }
+}
+
+function paintCaseResults() {
   const all = state.cases;
   const list = filteredCases();
 
@@ -1242,6 +1404,31 @@ function renderDetail(id) {
   const p =
     state.people[id] || {};
 
+  /*
+    Re-rendering the open detail must not steal focus, reset scroll or
+    discard unsent input. Only reuse state when this same case is
+    already open (never carry a draft across cases).
+  */
+  const modalCard = detailModal.querySelector(".modal-card");
+
+  const reuse =
+    detailModal.dataset.caseId === id &&
+    !detailModal.classList.contains("hidden");
+
+  const prevScroll = reuse && modalCard ? modalCard.scrollTop : 0;
+
+  const prevFocusId =
+    reuse && detailModal.contains(document.activeElement)
+      ? document.activeElement.id
+      : "";
+
+  const draftEl = reuse ? $("#dAssignee") : null;
+
+  const draft =
+    draftEl && draftEl.value !== draftEl.defaultValue
+      ? draftEl.value
+      : null;
+
   $("#detailEyebrow").textContent =
     "CASE · " +
     label(c.status).toUpperCase();
@@ -1358,28 +1545,39 @@ function renderDetail(id) {
 
   $("#dStatus").addEventListener(
     "change",
-    e =>
-      updateCase(
+    async e => {
+      const ok = await updateCase(
         id,
         {
           status:
             e.target.value
         },
         "Status updated"
-      )
+      );
+
+      // Revert the control if the change was refused.
+      if (!ok && state.detailId === id) {
+        renderDetail(id);
+      }
+    }
   );
 
   $("#dPriority").addEventListener(
     "change",
-    e =>
-      updateCase(
+    async e => {
+      const ok = await updateCase(
         id,
         {
           priority:
             e.target.value
         },
         "Priority updated"
-      )
+      );
+
+      if (!ok && state.detailId === id) {
+        renderDetail(id);
+      }
+    }
   );
 
   if (isOwner) {
@@ -1394,7 +1592,9 @@ function renderDetail(id) {
             .value
             .trim();
 
-        btn.disabled = true;
+        if (btn.getAttribute("aria-busy") === "true") return;
+
+        btn.setAttribute("aria-busy", "true");
 
         try {
           const {
@@ -1435,10 +1635,32 @@ function renderDetail(id) {
             false
           );
         } finally {
-          btn.disabled = false;
+          btn.removeAttribute("aria-busy");
         }
       }
     );
+  }
+
+  detailModal.dataset.caseId = id;
+
+  if (reuse) {
+    const again = $("#dAssignee");
+
+    if (draft !== null && again) {
+      again.value = draft;
+    }
+
+    if (modalCard) {
+      modalCard.scrollTop = prevScroll;
+    }
+
+    if (prevFocusId) {
+      const el = document.getElementById(prevFocusId);
+
+      if (el && detailModal.contains(el)) {
+        focusSafely(el);
+      }
+    }
   }
 
   loadTimeline(
@@ -1601,7 +1823,7 @@ async function renderActivity() {
               x =>
                 '<div class="activity" data-open="' +
                   esc(x.case_id) +
-                '">' +
+                '" tabindex="0" role="button">' +
 
                   "<b>" +
                     esc(
@@ -1655,6 +1877,33 @@ async function renderActivity() {
               row.dataset.open
           )
         ) {
+          openDetail(
+            row.dataset.open
+          );
+        }
+      }
+    );
+
+    box.addEventListener(
+      "keydown",
+      e => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+
+        const row =
+          e.target.closest(
+            "[data-open]"
+          );
+
+        if (
+          row &&
+          state.cases.some(
+            c =>
+              c.id ===
+              row.dataset.open
+          )
+        ) {
+          e.preventDefault();
+
           openDetail(
             row.dataset.open
           );
