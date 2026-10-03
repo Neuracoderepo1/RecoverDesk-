@@ -1,12 +1,37 @@
-name: Deploy
+name: CI and Deploy
 on:
   push: { branches: [main] }
+  pull_request:
   workflow_dispatch:
-permissions: { contents: read, pages: write, id-token: write }
-concurrency: { group: pages, cancel-in-progress: true }
+permissions: { contents: read }
+concurrency: { group: "ci-${{ github.ref }}", cancel-in-progress: true }
+
 jobs:
-  deploy:
+  validate:
+    name: Validate (syntax, secret scan, smoke, DOM tests)
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }          # full history for the secret scan
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - name: Database regression test (runs only when SUPABASE_DB_URL secret is set)
+        env: { DB_URL: "${{ secrets.SUPABASE_DB_URL }}" }
+        run: |
+          if [ -z "$DB_URL" ]; then echo "SUPABASE_DB_URL not set - skipping (run supabase/tests/rls_isolation.sql manually)"; exit 0; fi
+          out=$(psql "$DB_URL" -f supabase/tests/rls_isolation.sql 2>&1 || true)
+          echo "$out"
+          echo "$out" | grep -q "RESULTS" || { echo "test did not produce a report"; exit 1; }
+          if echo "$out" | grep -q "BAD"; then echo "RLS regression detected"; exit 1; fi
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: validate
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions: { contents: read, pages: write, id-token: write }
     environment: { name: github-pages, url: "${{ steps.d.outputs.page_url }}" }
     steps:
       - uses: actions/checkout@v4
@@ -16,3 +41,23 @@ jobs:
         with: { path: _site }
       - id: d
         uses: actions/deploy-pages@v4
+
+  verify-live:
+    name: Verify live deployment matches this commit
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare live assets to the commit
+        run: |
+          base="https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}"
+          for f in index.html app.js config.js styles.css favicon.svg; do
+            ok=0
+            for i in 1 2 3 4 5 6 7 8; do
+              live=$(curl -fsS "$base/$f" | sha256sum | cut -d' ' -f1 || true)
+              [ "$live" = "$(sha256sum "$f" | cut -d' ' -f1)" ] && { ok=1; break; }
+              sleep 10
+            done
+            [ $ok = 1 ] && echo "match  $f" || { echo "MISMATCH $f"; exit 1; }
+          done
+          curl -fsS "$base/" | grep -q "RecoverDesk" && echo "landing page OK"

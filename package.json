@@ -1,0 +1,13 @@
+{
+  "name": "recoverdesk",
+  "private": true,
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "smoke": "node --test tests/smoke/app.smoke.mjs",
+    "dom": "node tests/dom/dom.test.cjs",
+    "test": "node scripts/check.mjs && node --test tests/smoke/app.smoke.mjs && node tests/dom/dom.test.cjs",
+    "serve": "python3 -m http.server 8080",
+    "e2e": "playwright test tests/e2e --reporter=list"
+  },
+  "devDependencies": { "jsdom": "26.1.0" }
+}
