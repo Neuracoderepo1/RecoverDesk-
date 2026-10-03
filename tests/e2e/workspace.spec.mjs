@@ -1,8 +1,11 @@
 // Browser QA against the live Supabase project.
 // Prereq: Auth > Providers > Email > "Confirm email" OFF for the QA run (or use pre-confirmed users).
-// Run: BASE_URL=http://localhost:8080 npx playwright test tests/e2e --reporter=list
+// Run: npm run test:live   (needs a pre-confirmed or confirm-email-off QA setup)
 import { test, expect } from "@playwright/test";
 const BASE = process.env.BASE_URL || "http://localhost:8080";
+// Creates real users/cases in the live project, so it only runs when explicitly enabled.
+test.skip(!process.env.E2E_LIVE, "set E2E_LIVE=1 to run against live Supabase");
+test.describe.configure({ mode: "serial" });
 const stamp = Date.now();
 const users = { a: `qa-a-${stamp}@example.com`, b: `qa-b-${stamp}@example.com` };
 const pw = "RecoverDesk-QA-1!";
@@ -28,6 +31,11 @@ test("owner creates a case and advances its lifecycle", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Resolve" })).toBeVisible();
   await page.click('[data-view="activity"]');
   await expect(page.getByText("status changed")).toBeVisible();
+
+  // Toasts auto-hide after 4s, so assert immediately after the action.
+  await page.getByText("QA case A").first().click();
+  await page.selectOption("#dPriority", "high");
+  await expect(page.locator("#toast")).toHaveText("Priority updated");
 });
 
 test("a second user cannot see the first user's data", async ({ page }) => {

@@ -1,4 +1,4 @@
-import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/+esm";
+import { createClient } from "./vendor/supabase.js";
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from "./config.js";
 
 /* =========================================================
@@ -1324,7 +1324,11 @@ function renderDetail(id) {
         ) +
       "</select>" +
 
-      '<select id="dPriority" aria-label="Priority">' +
+      '<select id="dPriority" aria-label="Priority"' +
+        (isOwner
+          ? ""
+          : ' disabled title="Only the owner can change priority"') +
+        ">" +
         opts(
           PRIORITIES,
           c.priority
