@@ -54,7 +54,7 @@ $("#authForm").addEventListener("submit", async e => {
   btn.disabled = true;
   notice(msg, "Working…");
   const r = state.signUp
-    ? await supabase.auth.signUp({ email, password })
+    ? await supabase.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } })
     : await supabase.auth.signInWithPassword({ email, password });
   btn.disabled = false;
   if (r.error) return notice(msg, r.error.message, true);
