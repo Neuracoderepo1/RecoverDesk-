@@ -214,7 +214,9 @@ live("live: deployed app.js matches the committed file", async () => {
 
 live("live: landing page serves the expected shell", async () => {
   const body = await (await fetch(`${BASE}/`)).text();
-  assert.match(body, /<title>RecoverDesk<\/title>/);
+  const title = html.match(/<title>([^<]+)<\/title>/)?.[1];
+  assert.ok(title && title.startsWith("RecoverDesk"), "repo index.html has a RecoverDesk title");
+  assert.ok(body.includes(`<title>${title}</title>`), `live <title> matches repo: ${title}`);
   assert.match(body, /id="openAuth"/);
   assert.match(body, /\.\/app\.js/);
 });
