@@ -193,6 +193,133 @@ test(".env files are gitignored", () => {
   assert.match(ignore, /^\.env$/m);
 });
 
+/* ---------- runtime: timedFetch ---------- */
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Like real fetch: reject immediately if already aborted, otherwise on abort.
+const hangUntilAbort = (_u, init) =>
+  new Promise((_res, rej) => {
+    if (init.signal.aborted) return rej(init.signal.reason);
+    init.signal.addEventListener("abort", () => rej(init.signal.reason));
+  });
+
+function makeTimedFetch(stubFetch, timeoutMs) {
+  const m = app.match(/function timedFetch\(input, init = \{\}\) \{[\s\S]*?\n\}\n/);
+  assert.ok(m, "timedFetch() found");
+  return new Function("fetch", "TIMEOUT_MS", `${m[0]}; return timedFetch;`)(stubFetch, timeoutMs);
+}
+
+test("timedFetch: a hung request is aborted with a TimeoutError", async () => {
+  const tf = makeTimedFetch(
+    hangUntilAbort,
+    40
+  );
+  await assert.rejects(tf("https://x.test"), e => e.name === "TimeoutError");
+});
+
+test("timedFetch: a caller-supplied signal still cancels (and is not ignored)", async () => {
+  const tf = makeTimedFetch(
+    hangUntilAbort,
+    5_000
+  );
+  const ctl = new AbortController();
+  const pending = tf("https://x.test", { signal: ctl.signal });
+  ctl.abort(new Error("caller cancelled"));
+  await assert.rejects(pending, /caller cancelled/);
+
+  const pre = new AbortController();
+  pre.abort(new Error("already aborted"));
+  await assert.rejects(tf("https://x.test", { signal: pre.signal }), /already aborted/);
+});
+
+test("timedFetch: a stalled response BODY is also timed out", async () => {
+  let sig;
+  const tf = makeTimedFetch((_u, init) => {
+    sig = init.signal;
+    return Promise.resolve(
+      new Response(new ReadableStream({ start(c) { init.signal.addEventListener("abort", () => c.error(init.signal.reason)); } }))
+    );
+  }, 40);
+  await tf("https://x.test"); // headers arrive immediately
+  assert.equal(sig.aborted, false, "not aborted yet");
+  await sleep(150);
+  assert.equal(sig.aborted, true, "body stall aborted by timer");
+});
+
+test("timedFetch: a healthy response is returned intact and never aborted", async () => {
+  let sig;
+  const tf = makeTimedFetch((_u, init) => { sig = init.signal; return Promise.resolve(new Response("ok")); }, 40);
+  const res = await tf("https://x.test");
+  assert.equal(await res.text(), "ok");
+  await sleep(120);
+  assert.equal(sig.aborted, false, "timer cleared after body completed");
+});
+
+/* ---------- runtime: friendly() mappings added in the hardening review ---------- */
+
+test("friendly(): rate limits, DB timeouts, permissions, sessions, and no internals leaked", () => {
+  const m = app.match(/function friendly\(err\) \{[\s\S]*?\n\}\n/);
+  const friendly = new Function("console", `${m[0]}; return friendly;`)({ warn() {} });
+
+  assert.match(friendly({ status: 429, message: "Request rate limit reached" }), /Too many requests/);
+  assert.match(friendly({ code: "over_email_send_rate_limit", message: "x" }), /Too many emails/);
+  assert.match(friendly({ code: "57014", message: "canceling statement due to statement timeout" }), /took too long/);
+  assert.match(friendly({ name: "TimeoutError", message: "Request timed out" }), /Network problem/);
+  assert.match(friendly({ message: "JWT expired" }), /session has expired/i);
+
+  const rls = friendly({ code: "42501", message: 'new row violates row-level security policy for table "recovery_cases"' });
+  assert.match(rls, /permission/i);
+  assert.doesNotMatch(rls, /recovery_cases|row-level/);
+
+  const unknown = friendly(new Error('relation "secret_table" does not exist'));
+  assert.equal(unknown, "Something went wrong. Please try again.");
+
+  assert.equal(
+    friendly({ name: "AuthWeakPasswordError", message: "Password should be at least 10 characters." }),
+    "Password should be at least 10 characters."
+  );
+});
+
+/* ---------- static: review fixes ---------- */
+
+test("modals: page is made inert while open, and un-inerted BEFORE focus is restored", () => {
+  const open = app.slice(app.indexOf("function openModal("), app.indexOf("function closeModal("));
+  const close = app.slice(app.indexOf("function closeModal("), app.indexOf("function notice("));
+  assert.match(open, /syncInert\(\)/, "openModal makes the page inert");
+  assert.ok(close.indexOf("syncInert()") > -1, "closeModal syncs inert");
+  assert.ok(close.indexOf("syncInert()") < close.indexOf("focusSafely(back)"), "inert cleared before focus restore");
+  assert.match(close, /\.side-btn\.active, #openAuth/, "stable fallback focus target");
+});
+
+test("detail modal re-render preserves focus, scroll and unsent input (per-case)", () => {
+  assert.match(app, /detailModal\.dataset\.caseId === id/, "reuse only for the same open case");
+  assert.match(app, /draftEl\.value !== draftEl\.defaultValue/, "draft detection");
+  assert.match(app, /focusSafely\(el\)/, "focus restore");
+});
+
+test("loadCases ignores superseded responses", () => {
+  assert.match(app, /const seq = \+\+loadSeq/);
+  assert.equal((app.match(/if \(seq !== loadSeq\) return;/g) || []).length, 2, "checked after both awaits");
+});
+
+test("results re-render without rebuilding the toolbar or losing focus", () => {
+  assert.match(app, /if \(\$\("#fQ"\) && \$\("#caseResults"\)\) \{\s*return renderCaseResults\(\);/);
+  assert.match(app, /function paintCaseResults\(\)/);
+});
+
+test("in-flight guards and keyboard support", () => {
+  assert.match(app, /aria-busy/);
+  assert.match(app, /e\.key !== "Enter" && e\.key !== " "/);
+  assert.match(app, /class="activity"[\s\S]{0,80}tabindex="0" role="button"/);
+});
+
+test("styles: workspace hides landing chrome; busy state styled", () => {
+  const css = read("styles.css");
+  assert.match(css, /\.in-app \.site-header,\.in-app \.footer\{display:none\}/);
+  assert.match(css, /\[aria-busy="true"\]/);
+});
+
 /* ---------- live (opt-in) ---------- */
 
 const BASE = (process.env.BASE_URL || "").replace(/\/$/, "");
