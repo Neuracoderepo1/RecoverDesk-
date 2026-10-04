@@ -668,12 +668,14 @@ supabase.auth.onAuthStateChange(
    ========================================================= */
 
 let loadSeq = 0;
+let lastLoad = 0;
 
 async function loadCases() {
   if (!state.user) return;
 
   // Only the most recent request may update the UI.
   const seq = ++loadSeq;
+  lastLoad = Date.now();
 
   try {
     const {
@@ -1382,6 +1384,9 @@ function openDetail(id) {
   renderDetail(id);
 
   openModal(detailModal);
+
+  // Show the cached copy instantly, then refresh so another user's edits are never shown stale.
+  void loadCases();
 }
 
 function renderDetail(id) {
@@ -1946,6 +1951,17 @@ window.addEventListener(
     );
   }
 );
+
+/* Refresh when the tab/app returns to the foreground (another user may have changed a case). */
+document.addEventListener("visibilitychange", () => {
+  if (
+    document.visibilityState === "visible" &&
+    state.user &&
+    Date.now() - lastLoad > 10_000
+  ) {
+    void loadCases();
+  }
+});
 
 /* =========================================================
    Initial boot

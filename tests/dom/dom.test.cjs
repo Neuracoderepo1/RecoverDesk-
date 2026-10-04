@@ -234,6 +234,29 @@ async function t(name, fn) {
     assert.ok(open(document.querySelector("#detailModal")), "Enter opened the case");
   });
 
+  await t("opening the detail modal refreshes stale case data (another user changed it)", async () => {
+    const { document, fake } = await boot();
+    fake.db.cases[0].priority = "urgent"; // changed elsewhere after our list loaded
+    document.querySelector('article.case[data-open="c1"]').click();
+    await tick(80);
+    assert.equal(document.querySelector("#dPriority").value, "urgent", "modal shows fresh priority");
+  });
+
+  await t("returning to the foreground refreshes the list, but not more than once per 10s", async () => {
+    const { window, document, fake } = await boot();
+    const fire = () => document.dispatchEvent(new window.Event("visibilitychange"));
+    fake.db.cases[0].priority = "urgent";
+    const before = fake.calls.selects;
+    fire(); await tick(40);
+    assert.equal(fake.calls.selects, before, "no refetch within 10s of the last load");
+    const real = window.Date.now;
+    window.Date.now = () => real() + 20000;
+    fire(); await tick(60);
+    window.Date.now = real;
+    assert.equal(fake.calls.selects, before + 1, "one refetch after 10s");
+    assert.ok(/urgent/i.test(document.querySelector('article.case[data-open="c1"] .pill').textContent), "list shows fresh priority");
+  });
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

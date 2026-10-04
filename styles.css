@@ -24,3 +24,4 @@ button:disabled{opacity:.55;cursor:not-allowed}
 /* Signed-in workspace replaces the landing chrome */
 .in-app .site-header,.in-app .footer{display:none}
 [aria-busy="true"]{opacity:.55;cursor:progress}
+.case-meta .badge{text-transform:none}
