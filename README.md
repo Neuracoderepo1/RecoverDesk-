@@ -28,7 +28,8 @@ Recovery-case workspace: capture cases, assign owners/assignees, move them throu
 npm ci
 npm test         # syntax + asset/CSP + secret scan (tree and history) + smoke tests + DOM tests (CI gate)
 npm run serve    # local server on :8080
-npm run e2e      # Playwright browser QA; needs BASE_URL, and Confirm email OFF for the run
+npm run e2e:live # real-browser smoke test of the deployed site (no credentials, creates no data); CI runs it after every deploy
+npm run e2e      # full signed-in Playwright QA; needs BASE_URL, and Confirm email OFF for the run
 ```
 Database regression: run `supabase/tests/rls_isolation.sql` in the SQL editor or with `psql`. It rolls itself back and prints a report; every line must say OK or match its "want". CI runs it when the `SUPABASE_DB_URL` repository secret exists.
 

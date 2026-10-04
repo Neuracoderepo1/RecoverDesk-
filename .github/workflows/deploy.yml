@@ -61,3 +61,16 @@ jobs:
             [ $ok = 1 ] && echo "match  $f" || { echo "MISMATCH $f"; exit 1; }
           done
           curl -fsS "$base/" | grep -q "RecoverDesk" && echo "landing page OK"
+
+  browser-smoke:
+    name: Real-browser smoke test against the live site
+    needs: verify-live
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test tests/e2e/live-smoke.spec.mjs --reporter=list
+        env: { BASE_URL: "https://neuracoderepo1.github.io/RecoverDesk-/" }
