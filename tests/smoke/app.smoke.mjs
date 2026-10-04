@@ -11,7 +11,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -318,6 +318,29 @@ test("styles: workspace hides landing chrome; busy state styled", () => {
   const css = read("styles.css");
   assert.match(css, /\.in-app \.site-header,\.in-app \.footer\{display:none\}/);
   assert.match(css, /\[aria-busy="true"\]/);
+});
+
+/* ---------- static: migrations can rebuild the database ---------- */
+
+test("migrations define every table, RLS enablement, and every policy (no schema only in the dashboard)", () => {
+  const dir = join(ROOT, "supabase", "migrations");
+  const files = readdirSync(dir).filter(f => f.endsWith(".sql")).sort();
+  assert.ok(files.length >= 4, "baseline + hardening migrations present");
+  assert.match(files[0], /baseline/i, "baseline sorts first");
+  const sql = files.map(f => readFileSync(join(dir, f), "utf8")).join("\n");
+
+  for (const t of ["profiles", "recovery_cases", "case_events"]) {
+    assert.match(sql, new RegExp(`create table if not exists public\\.${t}\\b`, "i"), `creates ${t}`);
+    assert.match(sql, new RegExp(`alter table public\\.${t}\\s+enable row level security`, "i"), `enables RLS on ${t}`);
+  }
+  const policies = [...sql.matchAll(/create policy (\w+) on/gi)].map(m => m[1]).sort();
+  assert.deepEqual(policies, [
+    "cases_insert_owned", "cases_select_owned_or_assigned", "cases_update_owned_or_assigned",
+    "events_select_case_access", "profiles_insert_own", "profiles_select_own", "profiles_update_own"
+  ]);
+  assert.match(sql, /create trigger on_auth_user_created after insert on auth\.users/i, "signup trigger");
+  // Cases are a permanent record: nothing may (re)introduce client deletes or event writes.
+  assert.doesNotMatch(sql.split(/revoke delete on public\.recovery_cases/i).pop(), /create policy \w+ on public\.recovery_cases\s+for delete/i);
 });
 
 /* ---------- live (opt-in) ---------- */

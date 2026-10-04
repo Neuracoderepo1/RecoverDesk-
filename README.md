@@ -1,10 +1,10 @@
 # RecoverDesk
 
-Recovery-case workspace: capture cases, assign owners/assignees, move them through a lifecycle, and keep a tamper-proof audit trail.
+Recovery-case workspace: capture cases, assign owners/assignees, move them through a lifecycle, and keep an audit trail that clients cannot alter.
 
 ## Architecture
 - **Frontend:** static ES-module site (`index.html`, `app.js`, `styles.css`, `config.js`, `favicon.svg`), no build step. `@supabase/supabase-js` is loaded from a version-pinned jsDelivr URL; a Content-Security-Policy meta tag restricts scripts/styles/network to self, that CDN and the project's Supabase host.
-- **Backend:** Supabase (Postgres, Auth, RLS). Project ref `qxtevnkrbcfemyysvrzs`, region eu-central-1. Schema lives in `supabase/migrations/` (apply in filename order).
+- **Backend:** Supabase (Postgres, Auth, RLS). Project ref `qxtevnkrbcfemyysvrzs`, region eu-central-1. The full schema (tables, constraints, RLS policies, triggers, RPCs) is in `supabase/migrations/`; applying every file in filename order to an empty Supabase project rebuilds it (see *Rebuilding the database*).
 - **Hosting:** GitHub Pages via `.github/workflows/deploy.yml` at https://neuracoderepo1.github.io/RecoverDesk-/
 
 ## Configuration
@@ -31,6 +31,9 @@ npm run serve    # local server on :8080
 npm run e2e      # Playwright browser QA; needs BASE_URL, and Confirm email OFF for the run
 ```
 Database regression: run `supabase/tests/rls_isolation.sql` in the SQL editor or with `psql`. It rolls itself back and prints a report; every line must say OK or match its "want". CI runs it when the `SUPABASE_DB_URL` repository secret exists.
+
+## Rebuilding the database
+Apply `supabase/migrations/*.sql` in filename order to a fresh Supabase project (`supabase db push`, or paste each file into the SQL editor). `20261002000000_baseline_schema.sql` is the baseline and is idempotent. The live project already contains it, so do not replay it there: mark it applied with `supabase migration repair --status applied 20261002000000`. The result was verified against production: columns, constraints, indexes, policies, triggers, grants and function security all match, and `supabase/tests/rls_isolation.sql` passes on the rebuilt database. Two redundant index pairs remain in production (`recovery_cases_assigned_idx` / `_assigned_to_idx`, `case_events_case_idx` / `_case_id_idx`); they are harmless and kept so a rebuild stays identical.
 
 ## Deployment
 Push to `main` → `validate` must pass → `deploy` → `verify-live` compares SHA-256 of the live assets with the commit. A failing validation blocks deployment. First-time setup: Settings → Pages → Source: GitHub Actions.
